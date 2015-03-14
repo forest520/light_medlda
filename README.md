@@ -15,8 +15,8 @@ Third party libraries will be installed at `some_directory/third_party/`.
 
 Now we can build the main package:
 
-    git clone https://github.com/xunzheng/light-medlda
-    cd light-medlda
+    git clone https://github.com/xunzheng/light_medlda
+    cd light_medlda
     ln -s some_directory/third_party .
     make
 
