@@ -1,5 +1,9 @@
 #include "trainer.h"
 
+#include <fstream>
+#include <sys/stat.h>
+#include <sys/types.h>
+
 const real NUSQINV         = 1.0;
 const int  TRAIN_COLLECT   = 1;
 const int  TEST_COLLECT    = 20;
@@ -14,7 +18,6 @@ DEFINE_double(ell, 64.0, "Margin param in SVM: usually 1");
 DEFINE_int32(num_iter, 50, "Number of burn-in iterations for MCMC");
 DEFINE_int32(num_topic, 40, "Model size, usually called K");
 DEFINE_int32(eval_every, 100, "Evaluate the model every N iterations");
-DEFINE_int32(num_label, 20, "Total number of labels");
 DEFINE_int32(num_mh, 6, "Number of MH steps for each token");
 DEFINE_int32(num_gibbs, 2, "Number of Gibbs sampling for classifier");
 
@@ -26,13 +29,12 @@ void Trainer::ReadData(std::string train_file, std::string test_file) {
     Sample doc;
     char *ptr = line, *end = line + strlen(line);
     // Read label
-    doc.label_.setConstant(FLAGS_num_label, -1);
     char *sep = strchr(ptr, ':'); // sep at first colon
     while (*sep != ' ') --sep; // sep at space before first colon
     while (ptr != sep) {
       int y = strtol(ptr, &ptr); // ptr at space after label
-      CHECK(0 <= y and y < FLAGS_num_label) << "Invalid label";
-      doc.label_(y) = 1;
+      int label_id = label_dict_.insert_word(y);
+      doc.label_pool_.push_back(label_id);
     }
     // Read text
     while (ptr < end) {
@@ -49,10 +51,20 @@ void Trainer::ReadData(std::string train_file, std::string test_file) {
     train_.emplace_back(std::move(doc));
   }
   fclose(train_fp);
+  LW << "num label: " << label_dict_.size();
   LW << "num train doc: " << train_.size();
   LW << "num train word: " << dict_.size();
   LW << "num train token: " << num_token;
   LI << "---------------------------------------------------------------------";
+
+  // remap labels
+  for (auto &doc : train_) {
+    doc.label_.setConstant(label_dict_.size(), -1);
+    for (auto y : doc.label_pool_) {
+      doc.label_(y) = 1;
+    }
+    doc.label_pool_.clear();
+  }
 
   int num_oov = 0; // oov: out of vocabulary tokens
   size_t num_test_token = 0;
@@ -61,13 +73,13 @@ void Trainer::ReadData(std::string train_file, std::string test_file) {
     Sample doc;
     char *ptr = line, *end = line + strlen(line);
     // Read label
-    doc.label_.setConstant(FLAGS_num_label, -1);
+    doc.label_.setConstant(label_dict_.size(), -1);
     char *sep = strchr(ptr, ':'); // sep at first colon
     while (*sep != ' ') --sep; // sep at space before first colon
     while (ptr != sep) {
       int y = strtol(ptr, &ptr); // ptr at space after label
-      CHECK(0 <= y and y < FLAGS_num_label) << "Invalid label";
-      doc.label_(y) = 1;
+      int label_id = label_dict_.get_id(y);
+      doc.label_(label_id) = 1;
     }
     // Read text, replace oov with random word
     while (ptr < end) {
@@ -125,7 +137,7 @@ void Trainer::Train() {
 
   // Collect samples
   timer.tic();
-  EMatrix sum_classifier(FLAGS_num_label, FLAGS_num_topic);
+  EMatrix sum_classifier(label_dict_.size(), FLAGS_num_topic);
   for (int iter = 1; iter <= TRAIN_COLLECT; ++iter) {
     build_alias_table();
     for (auto& doc : train_) train_one_sample(doc);
@@ -145,10 +157,10 @@ void Trainer::Train() {
 void Trainer::init_param() {
   stat_.setZero(FLAGS_num_topic, dict_.size());
   summary_.setZero(FLAGS_num_topic);
-  classifier_.setZero(FLAGS_num_label, FLAGS_num_topic);
+  classifier_.setZero(label_dict_.size(), FLAGS_num_topic);
   phi_.setZero(FLAGS_num_topic, dict_.size());
   for (auto& doc : train_) {
-    doc.aux_.setConstant(FLAGS_num_label, 1.0);
+    doc.aux_.setConstant(label_dict_.size(), 1.0);
     doc.doc_topic_.setZero(FLAGS_num_topic);
     for (auto& pair : doc.body_) {
       pair.asg_ = DICE(FLAGS_num_topic);
@@ -179,7 +191,7 @@ void Trainer::build_alias_table() {
   Timer alias_timer; alias_timer.tic();
   EArray prob(FLAGS_num_topic);
   EArray denom = summary_.cast<real>() + FLAGS_beta * dict_.size();
-  for (size_t word_id = 0; word_id < dict_.size(); ++word_id) {
+  for (int word_id = 0; word_id < dict_.size(); ++word_id) {
     prob = (stat_.col(word_id).cast<real>() + FLAGS_beta) / denom;
     phi_.col(word_id) = prob;
     alias_[word_id].Build(prob);
@@ -229,8 +241,8 @@ void Trainer::train_one_sample(Sample& doc) {
     int s = old_topic, t = -1;
     real ntd_alpha, nsd_alpha, ntw_beta, nsw_beta, nt_betasum, ns_betasum;
     real proposal_s, proposal_t, numer, denom, pi, expo, accept;
-    EArray sum(FLAGS_num_label);
-    EVector diff(FLAGS_num_label);
+    EArray sum(label_dict_.size());
+    EVector diff(label_dict_.size());
     for (int i = 0; i < FLAGS_num_mh; ++i) {
       auto which_proposal = UNIF01 * 3;
       if (which_proposal < 1) { // word-proposal
@@ -327,7 +339,7 @@ void Trainer::draw_classifier() { // exact
   EVector svec(train_.size()); // D x 1
   EMatrix precision(FLAGS_num_topic, FLAGS_num_topic);
   EVector vec(FLAGS_num_topic);
-  for (int y = 0; y < FLAGS_num_label; ++y) {
+  for (int y = 0; y < label_dict_.size(); ++y) {
     for (size_t d = 0; d < train_.size(); ++d) {
       const auto& doc = train_[d];
       real doc_size = doc.body_.size();
@@ -357,7 +369,7 @@ void Trainer::draw_classifier() { // gibbs sampling
   EVector vvec(FLAGS_num_topic); // K x 1
   std::vector<int> k_list(FLAGS_num_topic);
   std::iota(RANGE(k_list), 0);
-  for (int y = 0; y < FLAGS_num_label; ++y) {
+  for (int y = 0; y < label_dict_.size(); ++y) {
     for (size_t d = 0; d < train_.size(); ++d) {
       const auto& doc = train_[d];
       real doc_size = doc.body_.size();
@@ -394,7 +406,7 @@ void Trainer::Infer() { // TODO: use MH
   // Cache est of phi
   EMatrix phi(FLAGS_num_topic, dict_.size()); // K x V
   EArray phi_denom = summary_.cast<real>() + beta_sum;
-  for (size_t word_id = 0; word_id < dict_.size(); ++word_id) {
+  for (int word_id = 0; word_id < dict_.size(); ++word_id) {
     phi.col(word_id) = (stat_.col(word_id).cast<real>() + beta) / phi_denom;
   }
 
@@ -465,7 +477,7 @@ void Trainer::Infer() { // TODO: use MH
     // Multi-label prediction
     using LabelScorePair = std::pair<int, real>;
     std::vector<LabelScorePair> score_list;
-    for (int l = 0; l < FLAGS_num_label; ++l) {
+    for (int l = 0; l < label_dict_.size(); ++l) {
       score_list.emplace_back(l, score(l));
     }
     std::sort(RANGE(score_list), [](const LabelScorePair& a, const LabelScorePair& b) {
@@ -485,4 +497,30 @@ void Trainer::Infer() { // TODO: use MH
   LI << "Test Accuracy (top 1): " << acc / test_.size()
      << " (" << acc << "/" << test_.size() << ")";
   fclose(pred_fp);
+}
+
+void Trainer::Save(std::string path) {
+  LI << "Saving result in " << path;
+  mkdir(path.c_str(), 0777);
+  // label mapping
+  std::string label_fn = path + "/label";
+  std::ofstream label_fs(label_fn);
+  CHECK(label_fs.is_open()) << "unable to open " << label_fn;
+  for (int y = 0; y < label_dict_.size(); ++y) {
+    // new label vs old label
+    label_fs << y << "\t" << label_dict_.get_word(y) << std::endl;
+  }
+  label_fs.close();
+  // eta
+  std::string eta_fn = path + "/eta";
+  std::ofstream eta_fs(eta_fn);
+  CHECK(eta_fs.is_open()) << "unable to open " << eta_fn;
+  eta_fs << classifier_;
+  eta_fs.close();
+  // phi
+  std::string phi_fn = path + "/phi";
+  std::ofstream phi_fs(phi_fn);
+  CHECK(phi_fs.is_open()) << "unable to open " << phi_fn;
+  phi_fs << phi_;
+  phi_fs.close();
 }

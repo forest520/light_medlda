@@ -13,6 +13,7 @@ struct Sample {
     Pair() = default;
     Pair(int tok) : tok_(tok) {}
   };
+  std::vector<int> label_pool_; // temporary pool
   IArray label_; // L x 1, {+1,-1}
   EArray aux_; // L x 1, c^2 lambda^-1 in the paper
   std::vector<Pair> body_;
@@ -24,6 +25,7 @@ public:
   void ReadData(std::string train_file, std::string test_file);
   void Train(); // parameter estimation on training dataset
   void Infer(); // inference on test dataset
+  void Save(std::string path); // save results in file
 
 private:
   void init_param();
@@ -39,5 +41,6 @@ private:
   EMatrix classifier_; // L x K, each row is a classifier
   std::vector<AliasUrn> alias_; // alias table for each word
   EMatrix phi_; // K x V
-  Dict  dict_;
+  Dict<int> label_dict_; // "dict" for potentially non-continuous labels
+  Dict<std::string> dict_;
 };
