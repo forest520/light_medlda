@@ -515,12 +515,24 @@ void Trainer::Save(std::string path) {
   std::string eta_fn = path + "/eta";
   std::ofstream eta_fs(eta_fn);
   CHECK(eta_fs.is_open()) << "unable to open " << eta_fn;
-  eta_fs << classifier_;
+  eta_fs << classifier_.transpose() << std::endl;
   eta_fs.close();
   // phi
   std::string phi_fn = path + "/phi";
   std::ofstream phi_fs(phi_fn);
   CHECK(phi_fs.is_open()) << "unable to open " << phi_fn;
-  phi_fs << phi_;
+  phi_fs << phi_ << std::endl;
   phi_fs.close();
+  // theta
+  std::string theta_fn = path + "/theta";
+  std::ofstream theta_fs(theta_fn);
+  CHECK(theta_fs.is_open()) << "unable to open " << theta_fn;
+  double alpha = FLAGS_alpha_sum / FLAGS_num_topic;
+  EArray theta(FLAGS_num_topic);
+  for (const auto& doc : train_) {
+    theta = (doc.doc_topic_.cast<real>() + alpha)
+                / (doc.body_.size() + FLAGS_alpha_sum);
+    theta_fs << theta.transpose() << std::endl;
+  } // end of for each doc
+  theta_fs.close();
 }

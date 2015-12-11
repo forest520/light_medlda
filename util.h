@@ -36,7 +36,7 @@ static int xorshift_rand() {
 // Eigen
 #define EIGEN_INITIALIZE_MATRICES_BY_ZERO
 #define EIGEN_DEFAULT_IO_FORMAT \
-        Eigen::IOFormat(FullPrecision,1," "," ","","","[","]")
+        Eigen::IOFormat(FullPrecision,1," ","\n","","","","")
 #include <Eigen/Dense>
 using real = double;
 using Eigen::Dynamic; using Eigen::ColMajor;
