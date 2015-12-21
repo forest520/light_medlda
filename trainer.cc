@@ -519,22 +519,8 @@ void Trainer::Save(std::string path) {
   CHECK(eta_fs.is_open()) << "unable to open " << eta_fn;
   eta_fs << classifier_.transpose() << std::endl;
   eta_fs.close();
-  // phi
-  //std::string phi_fn = path + "/phi";
-  //std::ofstream phi_fs(phi_fn);
-  //CHECK(phi_fs.is_open()) << "unable to open " << phi_fn;
-  //EArray prob(FLAGS_num_topic);
-  //EArray denom = summary_.cast<real>() + FLAGS_beta * dict_.size();
-  //for (int word_id = 0; word_id < dict_.size(); ++word_id) {
-  //  prob = (stat_.col(word_id).cast<real>() + FLAGS_beta) / denom;
-  //  phi_.col(word_id) = prob;
-  //}
-  //phi_fs << phi_ << std::endl;
-  //phi_fs.close();
-  // top words, each row is top words of a topic
-  std::string top_fn = path + "/topwords";
-  std::ofstream top_fs(top_fn);
-  CHECK(top_fs.is_open()) << "unable to open " << top_fn;
+  // top words, each column is a list of top words
+  EMAtrix topwords(FLAGS_top, FLAGS_num_topic);
   using id_val_t = std::pair<int,real>;
   for (int k = 0; k < FLAGS_num_topic; ++k) {
     std::vector<id_val_t> li;
@@ -544,29 +530,10 @@ void Trainer::Save(std::string path) {
     std::partial_sort(li.begin(), li.begin() + FLAGS_top, li.end(),
       [](const id_val_t &a, const id_val_t &b){ return a.second > b.second; });
     for (int i = 0; i < FLAGS_top; ++i) {
-      top_fs << dict_.get_word(li[i].first);
-      if (i != FLAGS_top - 1) {
-        top_fs << " ";
-      }
+      topwords(i,k) = li[i].first;
     }
-    top_fs << std::endl;
   }
-  top_fs.close();
-  // theta
-  //std::string theta_fn = path + "/theta";
-  //std::ofstream theta_fs(theta_fn);
-  //CHECK(theta_fs.is_open()) << "unable to open " << theta_fn;
-  //EArray theta(FLAGS_num_topic);
-  //for (const auto& doc : train_) {
-  //  theta = (doc.doc_topic_.cast<real>() + alpha)
-  //              / (doc.body_.size() + FLAGS_alpha_sum);
-  //  theta_fs << theta.transpose() << std::endl;
-  //} // end of for each doc
-  //theta_fs.close();
-  // avg theta over all docs that has label y
-  std::string avg_theta_fn = path + "/avg_theta";
-  std::ofstream avg_theta_fs(avg_theta_fn);
-  CHECK(avg_theta_fs.is_open()) << "unable to open" << avg_theta_fn;
+  // salient topics for each label
   for (int y = 0; y < label_dict_.size(); ++y) {
     EArray avg_theta(FLAGS_num_topic);
     int cnt = 0;
@@ -578,7 +545,28 @@ void Trainer::Save(std::string path) {
       }
     }
     avg_theta /= cnt;
-    avg_theta_fs << avg_theta.transpose() << std::endl;
+    std::vector<id_val_t> li;
+    for (int k = 0; k < FLAGS_num_topic; ++k) {
+      li.emplace_back(k,avg_theta(k));
+    }
+    std::sort(li.begin(), li.end(),
+      [](const id_val_t &a, const id_val_t &b) { return a.second > b.second; });
+    std::string salient_fn = path + "/salient." + std::to_string(y);
+    FILE *fp = fopen(salient_fn.c_str(), "w");
+    for (int k = 0; k < FLAGS_num_topic; ++k) {
+      fprintf(fp, "%15s:%02d", "topic", li[k].first);
+    }
+    fprintf(fp, "\n");
+    for (int k = 0; k < FLAGS_num_topic; ++k) {
+      fprintf(fp, "     (theta:%3.2f)", li[k].second);
+    }
+    fprintf(fp, "\n");
+    for (int i = 0; i < FLAGS_top; ++i) {
+      for (int k = 0; k < FLAGS_num_topic; ++k) {
+        fprintf(fp, "%18s", dict_.get_word(topwords(i,li[k].first)).c_str());
+      }
+      fprintf(fp, "\n");
+    }
+    fclose(fp);
   }
-  avg_theta_fs.close();
 }
